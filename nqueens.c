@@ -1,314 +1,652 @@
-/* This tries to be an efficient solution to the NQUEENS problem.
+/* This is trying to be an efficient implementation of the NQUEENS problem,
+ * employing the Dancing Links (DLX) technique.
  *
- * It must still trie harder, but for most sizes up to 200 results are returned
- * immediately.
+ * It must still try harder, but many sizes below 200 have instant results.
  *
- * Input is read from stdin as per http://spoj.com/problems/NQUEEN/
+ * While having clear structure, the code is very "unrolled". This is to make
+ * it easier to trace the process. I'm still planning to include visualisation,
+ * maybe with PostScript...
  *
- * I've deleted eight lines, and changed two others, so it can't resubmitted
- * by anyone without understanding.
+ * This is a solution to http://spoj.com/problem/NQUEEN/ . I don't want to
+ * spoil anything, so the code needs a little modification to work:
  *
- * AND there is still a bug hiding somewhere that I haven't found myself...
+ *  - add one little extra case at two locations
+ *  - fold the code to get below the 10000 character limit
+ *
+ * The missing piece won't affect that the code is easy to learn from...
+ *
+ * I just want to make sure this code isn't submitted without a good
+ * understanding of the algorithm...
  */
-
 
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
 
-#define MAXSIZE 510
-
-#ifdef ONLINE_JUDGE
-#define DEBUG(...) ({})
+#ifdef WITH_TRACING
+#define TRACE(...) printf(__VA_ARGS__)
 #else
-#define DEBUG printf
+#define TRACE(...) ({})
 #endif
 
+#define MAXSIZE 510
+
+typedef short idxtype;  /* must index arrays of length 2*MAXSIZE-1+2 */
+
 struct link {
-	unsigned char next;
-	unsigned char prev;
+	idxtype next;
+	idxtype prev;
 };
 
 struct cell {
-	struct link ns;
 	struct link we;
+	struct link ns;
 	struct link nwse;
 	struct link swne;
 };
 
 struct file {
 	int size;
-	unsigned char next;
-	unsigned char prev;
+	idxtype next;
+	idxtype prev;
+};
+
+struct folder {
+	int size;
+	struct file files[2*MAXSIZE-1+2];
 };
 
 static int problemsize;
+static int queens_remain;
 static int solution[MAXSIZE+2];
-static int num_queens_remaining;
 static struct cell cell[MAXSIZE+2][MAXSIZE+2];
-static struct {
-	struct file ns[MAXSIZE+2];
-	struct file we[MAXSIZE+2];
-	struct file nwse[2*MAXSIZE-1+2];
-	struct file swne[2*MAXSIZE-1+2];
-} files;
-/* number of remaining rows, columns, and diagonals */
-static struct {
-	int ns;
-	int we;
-	int nwse;
-	int swne;
-} count;
+static struct folder rows;
+static struct folder cols;
+static struct folder nwse;
+static struct folder swne;
 
-#define IGN +0*
-#define OPS_NS   +,   IGN, ns
-#define OPS_WE   IGN, +,   we
-#define OPS_NWSE +,   +,   nwse
-#define OPS_SWNE -,   +,   swne
-
-#define FILE_NS files.ns[j]
-#define FILE_WE files.we[i]
-#define FILE_NWSE files.nwse[i+problemsize+1-j-1]
-#define FILE_SWNE files.swne[i+j-1]
-
-#define UNLINK_FILE(file, count) \
-  (&file)[-file.prev].next = (&file)[file.next].prev = file.next + file.prev, \
-  (--count < num_queens_remaining ? (possible = 0) : 0), \
-  DEBUG("delfile %d %d %s\n", i, j, #file)
-#define RELINK_FILE(file, count) \
-  (&file)[-file.prev].next = file.prev, (&file)[file.next].prev = file.next, \
-  (count++), \
-  DEBUG("addfile %d %d %s\n", i, j, #file)
-
-#define DEC(file, count) (--file.size ? 0 : (UNLINK_FILE(file, count))), \
-	0/*DEBUG("Decreased %s, size: %d\n", #file, file.size)
-	   */
-#define INC(file, count) (file.size++ ? 0 : (RELINK_FILE(file, count))), \
-	0/*DEBUG("Increased %s, size: %d\n", #file, file.size)
-	   */
-
-#define DEC_NS   DEC(FILE_NS, count.ns)
-#define DEC_WE   DEC(FILE_WE, count.we)
-#define DEC_NWSE DEC(FILE_NWSE, count.nwse)
-#define DEC_SWNE DEC(FILE_SWNE, count.swne)
-#define INC_NS   INC(FILE_NS, count.ns)
-#define INC_WE   INC(FILE_WE, count.we)
-#define INC_NWSE INC(FILE_NWSE, count.nwse)
-#define INC_SWNE INC(FILE_SWNE, count.swne)
-
-#define CELL cell[i][j]
-#define DO_UNLINK_CELL(op1, op2, dir) \
-  cell[i op1 -CELL.dir.prev][j op2 -CELL.dir.prev].dir.next = \
-  cell[i op1 +CELL.dir.next][j op2 +CELL.dir.next].dir.prev = \
-    CELL.dir.prev + CELL.dir.next
-#define DO_RELINK_CELL(op1, op2, dir) \
-  cell[i op1 -CELL.dir.prev][j op2 -CELL.dir.prev].dir.next = CELL.dir.prev, \
-  cell[i op1 +CELL.dir.next][j op2 +CELL.dir.next].dir.prev = CELL.dir.next
-
-#define UNLINK_CELL(ops) DO_UNLINK_CELL(ops), DEBUG("del %d %d %s\n", i, j, #ops)
-#define RELINK_CELL(ops) DO_RELINK_CELL(ops), DEBUG("add %d %d %s\n", i, j, #ops)
-
-#define UNLINK_NS   UNLINK_CELL(OPS_NS),   DEC_NS
-#define UNLINK_WE   UNLINK_CELL(OPS_WE),   DEC_WE
-#define UNLINK_NWSE UNLINK_CELL(OPS_NWSE), DEC_NWSE
-#define UNLINK_SWNE UNLINK_CELL(OPS_SWNE), DEC_SWNE
-#define RELINK_NS   RELINK_CELL(OPS_NS),   INC_NS
-#define RELINK_WE   RELINK_CELL(OPS_WE),   INC_WE
-#define RELINK_NWSE RELINK_CELL(OPS_NWSE), INC_NWSE
-#define RELINK_SWNE RELINK_CELL(OPS_SWNE), INC_SWNE
-
-#define UNLINK_ALL \
-	UNLINK_CELL(OPS_NS), UNLINK_CELL(OPS_WE), \
-	UNLINK_CELL(OPS_NWSE), UNLINK_CELL(OPS_SWNE), \
-	UNLINK_FILE(FILE_NS, count.ns), UNLINK_FILE(FILE_WE, count.we), \
-	UNLINK_FILE(FILE_NWSE, count.nwse), UNLINK_FILE(FILE_SWNE, count.swne)
-#define RELINK_ALL \
-	RELINK_CELL(OPS_NS), RELINK_CELL(OPS_WE), \
-	RELINK_CELL(OPS_NWSE), RELINK_CELL(OPS_SWNE), \
-	RELINK_FILE(FILE_NS, count.ns), RELINK_FILE(FILE_WE, count.we), \
-	RELINK_FILE(FILE_NWSE, count.nwse), RELINK_FILE(FILE_SWNE, count.swne)
-
-#define UNLINK_BUT_NS   UNLINK_WE, UNLINK_NWSE, UNLINK_SWNE
-#define UNLINK_BUT_WE   UNLINK_NS, UNLINK_WE, UNLINK_SWNE
-#define UNLINK_BUT_NWSE UNLINK_NS, UNLINK_WE,   UNLINK_SWNE
-#define UNLINK_BUT_SWNE UNLINK_NS, UNLINK_WE,   UNLINK_NWSE
-#define RELINK_BUT_NS   RELINK_WE, RELINK_NWSE, RELINK_SWNE
-#define RELINK_BUT_WE   RELINK_NS, RELINK_WE, RELINK_SWNE
-#define RELINK_BUT_NWSE RELINK_NS, RELINK_WE,   RELINK_SWNE
-#define RELINK_BUT_SWNE RELINK_NS, RELINK_WE,   RELINK_NWSE
-
-#define DO_STEP(op1, op2, dir) \
-  ({ unsigned char __d = CELL.dir.next; i = i op1 __d; j = j op2 __d; })
-
-#define STEP(ops) DO_STEP(ops)
-
-#define STEP_NS   STEP(OPS_NS)
-#define STEP_WE   STEP(OPS_WE)
-#define STEP_NWSE STEP(OPS_NWSE)
-#define STEP_SWNE STEP(OPS_SWNE)
-
-#define FOREACH_NS for (i = 0, j = y; STEP_NS, i <= problemsize;)
-#define FOREACH_WE for (i = x, j = 0; STEP_WE, j <= problemsize;)
-#define FOREACH_NWSE_UPPER for (i = 0, j = y-x; STEP_NWSE, j <= problemsize;)
-#define FOREACH_NWSE_LOWER for (i = x-y, j = 0; STEP_NWSE, i <= problemsize;)
-#define FOREACH_SWNE_UPPER for (i = x+y, j = 0; STEP_SWNE, i >= 1;)
-#define FOREACH_SWNE_LOWER for (i = problemsize+1, j = y-(problemsize+1-x); STEP_SWNE, j<= problemsize;)
-
-
-static int try_cell(int x, int y);
-static int algorithm(void);
-
-
-static int place_queen(int x, int y)
+static int index_rows(int row, int col)
 {
-	int i = x, j = y;
-	int possible = 1;
-
-	DEBUG("PLACE %d %d\n", x, y);
-
-	assert(solution[x] == 0);
-	solution[x] = y;
-	num_queens_remaining -= 1;
-
-	UNLINK_ALL;
-
-	FOREACH_NS UNLINK_BUT_NS;
-	FOREACH_WE UNLINK_BUT_WE;
-	FOREACH_NWSE_UPPER UNLINK_BUT_NWSE;
-	FOREACH_NWSE_LOWER UNLINK_BUT_NWSE;
-	FOREACH_SWNE_LOWER UNLINK_BUT_SWNE;
-	FOREACH_SWNE_UPPER UNLINK_BUT_SWNE;
-
-	return possible;
+	col = col;  /* unused parameter */
+	return row;
 }
 
-static void remove_queen(int x, int y)
+static int index_cols(int row, int col)
 {
-	int i = x, j = y;
-
-	DEBUG("REMOVE %d %d\n", x, y);
-
-	assert(solution[x] == y);
-	solution[x] = 0;
-	num_queens_remaining += 1;
-
-	FOREACH_NS RELINK_BUT_NS;
-	FOREACH_WE RELINK_BUT_WE;
-	FOREACH_NWSE_UPPER RELINK_BUT_NWSE;
-	FOREACH_NWSE_LOWER RELINK_BUT_NWSE;
-	FOREACH_SWNE_LOWER RELINK_BUT_SWNE;
-	FOREACH_SWNE_UPPER RELINK_BUT_SWNE;
-
-	i = x, j = y;
-	RELINK_ALL;
+	row = row;  /* unused parameter */
+	return col;
 }
 
-static int try_cell(int x, int y)
+static int index_nwse(int row, int col)
 {
-	int r;
+	return row + problemsize+1-col - 1;
+}
 
-	r = place_queen(x, y);
+static int index_swne(int row, int col)
+{
+	return row + col - 1;
+}
 
-	if (!r)
-		DEBUG("Recognized impossible situation early\n");
+static void _unlink_file(struct folder *folder, int idx)
+{
+	int prev = folder->files[idx].prev;
+	int next = folder->files[idx].next;
 
-	if (r && algorithm())
-		/* Shortcut ! */
+	folder->files[idx-prev].next = next + prev;
+	folder->files[idx+next].prev = next + prev;
+	folder->size--;
+}
+
+static void _relink_file(struct folder *folder, int idx)
+{
+	int prev = folder->files[idx].prev;
+	int next = folder->files[idx].next;
+
+	folder->files[idx-prev].next = prev;
+	folder->files[idx+next].prev = next;
+	folder->size++;
+}
+
+static void unlink_file_rows(int idx)
+{
+	TRACE("UNLINK_FILE_ROW %d\n", idx);
+	_unlink_file(&rows, idx);
+}
+
+static void relink_file_rows(int idx)
+{
+	TRACE("RELINK_FILE_ROW %d\n", idx);
+	_relink_file(&rows, idx);
+}
+
+static void unlink_file_cols(int idx)
+{
+	TRACE("UNLINK_FILE_COL %d\n", idx);
+	_unlink_file(&cols, idx);
+}
+
+static void relink_file_cols(int idx)
+{
+	TRACE("RELINK_FILE_COL %d\n", idx);
+	_relink_file(&cols, idx);
+}
+
+static void unlink_file_nwse(int idx)
+{
+	TRACE("UNLINK_FILE_NWSE %d\n", idx);
+	_unlink_file(&nwse, idx);
+}
+
+static void relink_file_nwse(int idx)
+{
+	TRACE("RELINK_FILE_NWSE %d\n", idx);
+	_relink_file(&nwse, idx);
+}
+
+static void unlink_file_swne(int idx)
+{
+	TRACE("UNLINK_FILE_SWNE %d\n", idx);
+	_unlink_file(&swne, idx);
+}
+
+static void relink_file_swne(int idx)
+{
+	TRACE("RELINK_FILE_SWNE %d\n", idx);
+	_relink_file(&swne, idx);
+}
+
+static int _decrease_file(struct folder *folder, int idx)
+{
+	return --folder->files[idx].size == 0;
+}
+
+static int _increase_file(struct folder *folder, int idx)
+{
+	return folder->files[idx].size++ == 0;
+}
+
+#define DECREASE_FILE(folder, unlink, typ)         \
+({                                                 \
+	TRACE("DECREASE_FILE_" typ " %d\n", idx);  \
+	if (_decrease_file(&folder, idx))          \
+		unlink(idx);                       \
+})
+
+#define INCREASE_FILE(folder, relink, typ)         \
+({                                                 \
+	TRACE("INCREASE_" typ " %d\n", idx);       \
+	if (_increase_file(&folder, idx))          \
+		relink(idx);                       \
+})
+
+static void decrease_rows(int idx)
+{
+	DECREASE_FILE(rows, unlink_file_rows, "ROW");
+}
+
+static void increase_rows(int idx)
+{
+	INCREASE_FILE(rows, relink_file_rows, "ROW");
+}
+
+static void decrease_cols(int idx)
+{
+	DECREASE_FILE(cols, unlink_file_cols, "COL");
+}
+
+static void increase_cols(int idx)
+{
+	INCREASE_FILE(cols, relink_file_cols, "COL");
+}
+
+static void decrease_nwse(int idx)
+{
+	DECREASE_FILE(nwse, unlink_file_nwse, "NWSE");
+}
+
+static void increase_nwse(int idx)
+{
+	INCREASE_FILE(nwse, relink_file_nwse, "NWSE");
+}
+
+static void decrease_swne(int idx)
+{
+	DECREASE_FILE(swne, unlink_file_swne, "SWNE");
+}
+
+static void increase_swne(int idx)
+{
+	INCREASE_FILE(swne, relink_file_swne, "SWNE");
+}
+
+static void decrease_but_rows(int row, int col)
+{
+	TRACE("DECREASE_BUT_ROWS %d %d\n", row, col);
+	decrease_cols(index_cols(row, col));
+	decrease_nwse(index_nwse(row, col));
+	decrease_swne(index_swne(row, col));
+}
+
+static void increase_but_rows(int row, int col)
+{
+	TRACE("INCREASE_BUT_ROWS %d %d\n", row, col);
+	increase_cols(index_cols(row, col));
+	increase_nwse(index_nwse(row, col));
+	increase_swne(index_swne(row, col));
+}
+
+static void decrease_but_cols(int row, int col)
+{
+	TRACE("DECREASE_BUT_COLS %d %d\n", row, col);
+	decrease_rows(index_rows(row, col));
+	decrease_nwse(index_nwse(row, col));
+	decrease_swne(index_swne(row, col));
+}
+
+static void increase_but_cols(int row, int col)
+{
+	TRACE("INCREASE_BUT_COLS %d %d\n", row, col);
+	increase_rows(index_rows(row, col));
+	increase_nwse(index_nwse(row, col));
+	increase_swne(index_swne(row, col));
+}
+
+static void decrease_but_nwse(int row, int col)
+{
+	TRACE("DECREASE_BUT_NWSE %d %d\n", row, col);
+	decrease_rows(index_rows(row, col));
+	decrease_cols(index_cols(row, col));
+	decrease_swne(index_swne(row, col));
+}
+
+static void increase_but_nwse(int row, int col)
+{
+	TRACE("INCREASE_BUT_NWSE %d %d\n", row, col);
+	increase_rows(index_rows(row, col));
+	increase_cols(index_cols(row, col));
+	increase_swne(index_swne(row, col));
+}
+
+static void decrease_but_swne(int row, int col)
+{
+	TRACE("DECREASE_BUT_SWNE %d %d\n", row, col);
+	decrease_rows(index_rows(row, col));
+	decrease_cols(index_cols(row, col));
+	decrease_nwse(index_nwse(row, col));
+}
+
+static void increase_but_swne(int row, int col)
+{
+	TRACE("INCREASE_BUT_SWNE %d %d\n", row, col);
+	increase_rows(index_rows(row, col));
+	increase_cols(index_cols(row, col));
+	increase_nwse(index_nwse(row, col));
+}
+
+static void unlink_we(int row, int col)
+{
+	TRACE("UNLINK_WE %d %d\n", row, col);
+
+	int prev = cell[row][col].we.prev;
+	int next = cell[row][col].we.next;
+
+	cell[row][col-prev].we.next = prev + next;
+	cell[row][col+next].we.prev = prev + next;
+}
+
+static void relink_we(int row, int col)
+{
+	TRACE("RELINK_WE %d %d\n", row, col);
+
+	int prev = cell[row][col].we.prev;
+	int next = cell[row][col].we.next;
+
+	cell[row][col-prev].we.next = prev;
+	cell[row][col+next].we.prev = next;
+}
+
+static void unlink_ns(int row, int col)
+{
+	TRACE("UNLINK_NS %d %d\n", row, col);
+
+	int prev = cell[row][col].ns.prev;
+	int next = cell[row][col].ns.next;
+
+	cell[row-prev][col].ns.next = prev + next;
+	cell[row+next][col].ns.prev = prev + next;
+}
+
+static void relink_ns(int row, int col)
+{
+	TRACE("RELINK_NS %d %d\n", row, col);
+
+	int prev = cell[row][col].ns.prev;
+	int next = cell[row][col].ns.next;
+
+	cell[row-prev][col].ns.next = prev;
+	cell[row+next][col].ns.prev = next;
+}
+
+static void unlink_nwse(int row, int col)
+{
+	TRACE("UNLINK_NWSE %d %d\n", row, col);
+
+	int prev = cell[row][col].nwse.prev;
+	int next = cell[row][col].nwse.next;
+
+	cell[row-prev][col-prev].nwse.next = prev + next;
+	cell[row+next][col+next].nwse.prev = prev + next;
+}
+
+static void relink_nwse(int row, int col)
+{
+	TRACE("RELINK_NWsE %d %d\n", row, col);
+
+	int prev = cell[row][col].nwse.prev;
+	int next = cell[row][col].nwse.next;
+
+	cell[row-prev][col-prev].nwse.next = prev;
+	cell[row+next][col+next].nwse.prev = next;
+}
+
+static void unlink_swne(int row, int col)
+{
+	TRACE("UNLINK_SWNE %d %d\n", row, col);
+
+	int prev = cell[row][col].swne.prev;
+	int next = cell[row][col].swne.next;
+
+	cell[row+prev][col-prev].swne.next = prev + next;
+	cell[row-next][col+next].swne.prev = prev + next;
+}
+
+static void relink_swne(int row, int col)
+{
+	TRACE("RELINK_SWNE %d %d\n", row, col);
+
+	int prev = cell[row][col].swne.prev;
+	int next = cell[row][col].swne.next;
+
+	cell[row+prev][col-prev].swne.next = prev;
+	cell[row-next][col+next].swne.prev = next;
+}
+
+static void unlink_but_ns(int row, int col)
+{
+	TRACE("UNLINK_BUT_NS %d %d\n", row, col);
+	unlink_we(row, col);
+	unlink_nwse(row, col);
+	unlink_swne(row, col);
+}
+
+static void relink_but_ns(int row, int col)
+{
+	TRACE("RELINK_BUT_NS %d %d\n", row, col);
+	relink_we(row, col);
+	relink_nwse(row, col);
+	relink_swne(row, col);
+}
+
+static void unlink_but_we(int row, int col)
+{
+	TRACE("UNLINK_BUT_WE %d %d\n", row, col);
+	unlink_ns(row, col);
+	unlink_nwse(row, col);
+	unlink_swne(row, col);
+}
+
+static void relink_but_we(int row, int col)
+{
+	TRACE("RELINK_BUT_WE %d %d\n", row, col);
+	relink_ns(row, col);
+	relink_nwse(row, col);
+	relink_swne(row, col);
+}
+
+static void unlink_but_nwse(int row, int col)
+{
+	TRACE("UNLINK_BUT_NWSE %d %d\n", row, col);
+	unlink_ns(row, col);
+	unlink_we(row, col);
+	unlink_swne(row, col);
+}
+
+static void relink_but_nwse(int row, int col)
+{
+	TRACE("RELINK_BUT_NWSE %d %d\n", row, col);
+	relink_ns(row, col);
+	relink_we(row, col);
+	relink_swne(row, col);
+}
+
+static void unlink_but_swne(int row, int col)
+{
+	TRACE("UNLINK_BUT_SWNE %d %d\n", row, col);
+	unlink_ns(row, col);
+	unlink_we(row, col);
+	unlink_nwse(row, col);
+}
+
+static void relink_but_swne(int row, int col)
+{
+	TRACE("RELINK_BUT_SWNE %d %d\n", row, col);
+	relink_ns(row, col);
+	relink_we(row, col);
+	relink_nwse(row, col);
+}
+
+static int choose_row(void)
+{
+	int row = 0;
+	int minsize = problemsize + 1;
+	int minrow = -1;
+
+	while (row += rows.files[row].next, row <= problemsize) {
+		if (minsize > rows.files[row].size) {
+			minsize = rows.files[row].size;
+			minrow = row;
+		}
+	}
+	assert(row > 0);
+
+	TRACE("CHOOSEROW %d\n", minrow);
+
+	return minrow;
+}
+
+static void protect(int row, int col)
+{
+	TRACE("PROTECT %d %d\n", row, col);
+
+	unlink_we(row, col);
+	unlink_ns(row, col);
+	unlink_nwse(row, col);
+	unlink_swne(row, col);
+
+	unlink_file_rows(index_rows(row, col));
+	unlink_file_cols(index_cols(row, col));
+	unlink_file_nwse(index_nwse(row, col));
+	unlink_file_swne(index_swne(row, col));
+}
+
+static void unprotect(int row, int col)
+{
+	TRACE("UNPROTECT %d %d\n", row, col);
+
+	relink_file_rows(index_rows(row, col));
+	relink_file_cols(index_cols(row, col));
+	relink_file_nwse(index_nwse(row, col));
+	relink_file_swne(index_swne(row, col));
+
+	relink_we(row, col);
+	relink_ns(row, col);
+	relink_nwse(row, col);
+	relink_swne(row, col);
+}
+
+#define FOREACH_WE for (i = row, j = 0; j += cell[i][j].we.next, j <= problemsize;)
+
+#define FOREACH_NS for (i = 0, j = col; i += cell[i][j].ns.next, i <= problemsize;)
+
+#define FOREACH_NWSE for (i = 0, j = col-row; d = cell[i][j].nwse.next, i += d, j += d, j <= problemsize;)
+
+#define FOREACH_SWNE for (i = row+col, j = 0; d = cell[i][j].swne.next, i -= d, j += d, i > 0;)
+
+static void place_queen(int row, int col)
+{
+	int i, j, d;
+
+	TRACE("PLACE_QUEEN %d %d\n", row, col);
+
+	queens_remain -= 1;
+	assert(solution[row] == 0);
+	solution[row] = col;
+
+	protect(row, col);
+
+	TRACE("UNLINK_CELLS %d %d\n", row, col);
+
+	TRACE("UNLINK_ALONG_WE %d %d\n", row, col);
+	FOREACH_WE
+		unlink_but_we(i, j), decrease_but_rows(i, j);
+	TRACE("UNLINK_ALONG_NS %d %d\n", row, col);
+	FOREACH_NS
+		unlink_but_ns(i, j), decrease_but_cols(i, j);
+	TRACE("UNLINK_ALONG_NWSE %d %d\n", row, col);
+	FOREACH_NWSE
+		unlink_but_nwse(i, j), decrease_but_nwse(i, j);
+	TRACE("UNLINK_ALONG_SWNE %d %d\n", row, col);
+	FOREACH_SWNE
+		unlink_but_swne(i, j), decrease_but_swne(i, j);
+}
+
+static void remove_queen(int row, int col)
+{
+	int i, j, d;
+
+	TRACE("REMOVE_QUEEN %d %d\n", row, col);
+
+	TRACE("RELINK_CELLS %d %d\n", row, col);
+
+	TRACE("RELINK_ALONG_SWNE %d %d\n", row, col);
+	FOREACH_SWNE
+		relink_but_swne(i, j), increase_but_swne(i, j);
+	TRACE("RELINK_ALONG_NWSE %d %d\n", row, col);
+	FOREACH_NWSE
+		relink_but_nwse(i, j), increase_but_nwse(i, j);
+	TRACE("RELINK_ALONG_NS %d %d\n", row, col);
+	FOREACH_NS
+		relink_but_ns(i, j), increase_but_cols(i, j);
+	TRACE("RELINK_ALONG_WE %d %d\n", row, col);
+	FOREACH_WE
+		relink_but_we(i, j), increase_but_rows(i, j);
+
+	unprotect(row, col);
+
+	assert(solution[row] == col);
+	solution[row] = 0;
+	queens_remain += 1;
+}
+
+static int recurse(void)
+{
+	int row, col;
+
+	if (queens_remain == 0)
 		return 1;
 
-	remove_queen(x, y);
+	if (rows.size < queens_remain)
+		return 0;
+	if (cols.size < queens_remain)
+		return 0;
+	if (nwse.size < queens_remain)
+		return 0;
+	if (swne.size < queens_remain)
+		return 0;
+
+	row = choose_row();
+
+	for (col = 0; col += cell[row][col].we.next, col <= problemsize;) {
+		place_queen(row, col);
+
+		if (recurse())
+			return 1;
+
+		remove_queen(row, col);
+	}
 
 	return 0;
 }
 
-static int algorithm(void)
-{
-	int row, col, minsize, minrow;
-
-	if (num_queens_remaining == 0)
-		return 1;
-
-	if (files.we[0].next > problemsize)
-		return 0;
-
-	/* choose row r */
-
-	minrow = -1;
-	minsize = problemsize+1;
-	for (row = 0; (row += files.we[row].next) <= problemsize;) {
-		if (minsize > files.we[row].size) {
-			minsize = files.we[row].size;
-			minrow = row;
-		}
-	}
-	assert(minrow != -1);
-	row = minrow;
-
-	DEBUG("trying %d\n", row);
-
-	/* for each cell in the row... */
-
-	col = 0;
-	for (;;) {
-		col += cell[row][col].we.next;
-
-		if (col == problemsize+1)
-			return 0;
-
-		if (try_cell(row, col))
-			return 1;
-	}
-
-	assert(0);
-}
-
 static int parse(void)
 {
-	int i, j;
+	int i;
+	int j;
 
 	if (scanf("%d", &problemsize) != 1)
 		return 0;
+
 	if (problemsize > MAXSIZE) {
-		fprintf(stderr, "Problem size is bigger than MAXSIZE\n");
+		fprintf(stderr, "The given problemsize (%d) is greater than "
+			"the compile time constant MAXSIZE (%d)\n",
+			problemsize, MAXSIZE);
 		exit(1);
 	}
 
-
-	/* Reset */
+	queens_remain = problemsize;
 
 	for (i = 1; i <= problemsize; i++)
 		solution[i] = 0;
-	num_queens_remaining = problemsize;
 
-	for (i = 0; i < problemsize+2; i++)
-		for (j = 0; j < problemsize+2; j++)
-			CELL.ns.prev = CELL.ns.next = \
-			CELL.we.prev = CELL.we.next = \
-			CELL.nwse.prev = CELL.nwse.next = \
-			CELL.swne.prev = CELL.swne.next = 1;
+	for (i = 0; i < problemsize+2; i++) {
+		for (j = 0; j < problemsize+2; j++) {
+			cell[i][j].ns.next = 1;
+			cell[i][j].ns.prev = 1;
+			cell[i][j].we.next = 1;
+			cell[i][j].we.prev = 1;
+			cell[i][j].nwse.next = 1;
+			cell[i][j].nwse.prev = 1;
+			cell[i][j].swne.next = 1;
+			cell[i][j].swne.prev = 1;
+		}
+	}
 
-	for (i = 0; i < problemsize+2; i++)
-		files.ns[i].prev = files.ns[i].next = \
-		files.we[i].prev = files.we[i].next = 1;
-	for (i = 0; i < 2*problemsize-1+2; i++)
-		files.nwse[i].prev = files.nwse[i].next = \
-		files.swne[i].prev = files.swne[i].next = 1;
-	for (i = 1; i <= problemsize; i++)
-		files.ns[i].size = \
-		files.we[i].size = problemsize;
-	for (i = 1; i <= problemsize; i++)
-		files.nwse[i].size = files.nwse[2*problemsize-1+1-i].size = \
-		files.swne[i].size = files.swne[2*problemsize-1+1-i].size = i;
+	rows.size = problemsize;
+	for (i = 0; i < problemsize+2; i++) {
+		rows.files[i].size = problemsize;
+		rows.files[i].next = 1;
+		rows.files[i].prev = 1;
+	}
 
-	count.ns = count.we = problemsize;
-	count.nwse = count.swne = 2*problemsize-1;
+	cols.size = problemsize;
+	for (i = 0; i < problemsize+2; i++) {
+		cols.files[i].size = problemsize;
+		cols.files[i].next = 1;
+		cols.files[i].prev = 1;
+	}
 
-	/* Place initial queens as stdin tells us */
+	nwse.size = 2*problemsize-1;
+	for (i = 0; i < 2*problemsize-1+2; i++) {
+		nwse.files[i].size = (i <= problemsize) ? i : 2*problemsize-i;
+		nwse.files[i].next = 1;
+		nwse.files[i].prev = 1;
+	}
+
+	swne.size = 2*problemsize-1;
+	for (i = 0; i < 2*problemsize-1+2; i++) {
+		swne.files[i].size = (i <= problemsize) ? i : 2*problemsize-i;
+		swne.files[i].next = 1;
+		swne.files[i].prev = 1;
+	}
 
 	for (i = 1; i <= problemsize; i++) {
-		if (scanf("%d", &j) != 1)
-			assert(0);
-		if (j)
+		if (scanf("%d", &j) != 1) {
+			fprintf(stderr, "Failed to read all pre-set queens. "
+				"Problemsize is %d, but could read only %d.\n",
+				problemsize, i-1);
+			exit(1);
+		}
+		if (j != 0)
 			place_queen(i, j);
 	}
 
@@ -317,35 +655,21 @@ static int parse(void)
 
 static void solve(void)
 {
-	algorithm();
+	recurse();
 }
 
-static void print_solution(void)
+static void print(void)
 {
 	int i;
-
-	for (i = 1; i <= problemsize; i++) {
-		printf("%d", solution[i]);
-		printf(i < problemsize ? " " : "\n");
-	}
+	for (i = 1; i <= problemsize; i++)
+		printf("%d%c", solution[i], i < problemsize ? ' ' : '\n');
 }
 
 int main(void)
 {
 	while (parse()) {
-		DEBUG("\n");
-		/*
-#define TESTIT printf("(%d %d) (%d %d) (%d %d)\n", files.we[0].prev, files.we[0].next, files.we[1].prev, files.we[1].next, files.we[2].prev, files.we[2].next)
-		TESTIT;
-		int i = 1, j = 1; UNLINK_FILE(FILE_WE);
-		TESTIT;
-		i = 2, j = 3; UNLINK_FILE(FILE_WE);
-		TESTIT;
-		return 0;
-		*/
-
 		solve();
-		print_solution();
+		print();
 	}
 
 	return 0;
