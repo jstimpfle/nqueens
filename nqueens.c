@@ -13,10 +13,9 @@
  *  - add one little extra case at two locations
  *  - fold the code to get below the 10000 character limit
  *
- * The missing piece won't affect that the code is easy to learn from...
- *
  * I just want to make sure this code isn't submitted without a good
- * understanding of the algorithm...
+ * understanding of the algorithm. The missing piece doesn't affect that the
+ * code is easy to learn from.
  */
 
 #include <assert.h>
