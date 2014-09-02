@@ -7,7 +7,7 @@
  * it easier to trace the process. I'm still planning to include visualisation,
  * maybe with PostScript...
  *
- * This is a solution to http://spoj.com/problem/NQUEEN/ . I don't want to
+ * This is a solution to http://spoj.com/problems/NQUEEN/ . I don't want to
  * spoil anything, so the code needs a little modification to work:
  *
  *  - add one little extra case at two locations
