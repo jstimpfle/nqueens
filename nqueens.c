@@ -339,7 +339,7 @@ static void unlink_nwse(int row, int col)
 
 static void relink_nwse(int row, int col)
 {
-	TRACE("RELINK_NWsE %d %d\n", row, col);
+	TRACE("RELINK_NWSE %d %d\n", row, col);
 
 	int prev = cell[row][col].nwse.prev;
 	int next = cell[row][col].nwse.next;
